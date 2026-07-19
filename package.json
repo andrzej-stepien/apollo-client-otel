@@ -1,0 +1,55 @@
+{
+  "name": "apollo-client-otel",
+  "version": "0.1.0",
+  "description": "OpenTelemetry instrumentation for Apollo Client that understands GraphQL operations, implemented as a plain ApolloLink.",
+  "keywords": [
+    "apollo",
+    "apollo-client",
+    "graphql",
+    "opentelemetry",
+    "otel",
+    "tracing",
+    "observability",
+    "apollo-link"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "@apollo/client": "^3.0.0",
+    "@opentelemetry/api": ">=1.0.0",
+    "graphql": ">=15.0.0"
+  },
+  "devDependencies": {
+    "@apollo/client": "3.11.8",
+    "@opentelemetry/api": "1.9.0",
+    "@opentelemetry/core": "1.30.1",
+    "@opentelemetry/sdk-trace-base": "1.30.1",
+    "graphql": "16.9.0",
+    "tsup": "8.3.5",
+    "typescript": "5.7.2",
+    "vitest": "2.1.8"
+  }
+}

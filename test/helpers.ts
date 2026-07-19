@@ -1,0 +1,90 @@
+import {
+  ApolloLink,
+  Observable,
+  execute,
+  gql,
+} from "@apollo/client/core";
+import type { FetchResult, GraphQLRequest } from "@apollo/client/core";
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  SimpleSpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
+import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
+import type { Tracer } from "@opentelemetry/api";
+
+export { gql };
+
+export interface TracingHarness {
+  tracer: Tracer;
+  exporter: InMemorySpanExporter;
+  spans: () => ReadableSpan[];
+}
+
+export function createTracingHarness(): TracingHarness {
+  const exporter = new InMemorySpanExporter();
+  const provider = new BasicTracerProvider();
+  provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
+  const tracer = provider.getTracer("test");
+  return {
+    tracer,
+    exporter,
+    spans: () => exporter.getFinishedSpans(),
+  };
+}
+
+/** Terminating link that resolves once with the given result. */
+export function successLink(result: FetchResult): ApolloLink {
+  return new ApolloLink(() => Observable.of(result));
+}
+
+/** Terminating link that emits a transport-level (network) error. */
+export function networkErrorLink(error: Error): ApolloLink {
+  return new ApolloLink(
+    () =>
+      new Observable<FetchResult>((observer) => {
+        observer.error(error);
+      }),
+  );
+}
+
+/**
+ * Terminating link that emits multiple results then completes - used to model a
+ * subscription-style multi-emission observable.
+ */
+export function streamingLink(results: FetchResult[]): ApolloLink {
+  return new ApolloLink(
+    () =>
+      new Observable<FetchResult>((observer) => {
+        for (const result of results) {
+          observer.next(result);
+        }
+        observer.complete();
+      }),
+  );
+}
+
+/** Terminating link whose observable never emits (models a pending request). */
+export function neverEmitsLink(): ApolloLink {
+  return new ApolloLink(() => new Observable<FetchResult>(() => {}));
+}
+
+export interface RunOutcome {
+  results: FetchResult[];
+  error?: unknown;
+}
+
+/** Executes a link chain and resolves when the operation settles. */
+export function runOperation(
+  link: ApolloLink,
+  request: GraphQLRequest,
+): Promise<RunOutcome> {
+  return new Promise((resolve) => {
+    const results: FetchResult[] = [];
+    execute(link, request).subscribe({
+      next: (result) => results.push(result),
+      error: (error) => resolve({ results, error }),
+      complete: () => resolve({ results }),
+    });
+  });
+}
