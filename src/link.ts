@@ -10,7 +10,11 @@ import type { FetchResult, Operation } from "@apollo/client/core";
 
 import {
   ATTR_APOLLO_CANCELED,
+  ATTR_APOLLO_GRAPHQL_ERROR_COUNT,
   ATTR_APOLLO_HAS_GRAPHQL_ERRORS,
+  ATTR_APOLLO_PERSISTED_QUERY,
+  ATTR_APOLLO_PERSISTED_QUERY_HASH,
+  ATTR_APOLLO_RETRY_COUNT,
   ATTR_ERROR_TYPE,
   ATTR_GRAPHQL_DOCUMENT,
   ATTR_GRAPHQL_OPERATION_NAME,
@@ -18,6 +22,8 @@ import {
   ATTR_SERVER_ADDRESS,
   ATTR_SERVER_PORT,
 } from "./attributes";
+import { createMetricsRecorder } from "./metrics";
+import type { MetricsRecorder } from "./metrics";
 import { resolveOptions } from "./options";
 import type { OpenTelemetryLinkOptions, ResolvedOptions } from "./options";
 import {
@@ -25,9 +31,17 @@ import {
   describeOperation,
   isIntrospectionOperation,
   printRedactedDocument,
+  resolvePersistedQuery,
+  resolveRetryCount,
 } from "./operation";
 import type { OperationInfo } from "./operation";
 import { resolveServerAddress } from "./serverAddress";
+
+/** Monotonic clock in milliseconds, falling back to `Date.now` when needed. */
+const monotonicNow: () => number =
+  typeof performance !== "undefined" && typeof performance.now === "function"
+    ? () => performance.now()
+    : () => Date.now();
 
 function errorTypeOf(error: unknown): string {
   if (error instanceof Error) {
@@ -36,8 +50,37 @@ function errorTypeOf(error: unknown): string {
   return "Error";
 }
 
-function hasGraphQLErrors(result: FetchResult): boolean {
-  return Array.isArray(result.errors) && result.errors.length > 0;
+/** Number of GraphQL errors on a result, or 0 when there are none. */
+function graphQLErrorCount(result: FetchResult): number {
+  return Array.isArray(result.errors) ? result.errors.length : 0;
+}
+
+/**
+ * Duck-types a combined GraphQL error surfaced on the error channel.
+ *
+ * Apollo Client 4 wraps GraphQL errors from the `errors` field into a
+ * `CombinedGraphQLErrors` object (an `Error` subclass carrying an `errors`
+ * array). Rather than importing that class - which would couple us to one major
+ * version - we detect the shape: an object with an array-valued `errors`
+ * property. This also matches similarly shaped custom/aggregate errors.
+ */
+interface CombinedGraphQLErrorLike {
+  errors: readonly unknown[];
+  name?: string;
+  message?: string;
+}
+
+function asCombinedGraphQLError(
+  error: unknown,
+): CombinedGraphQLErrorLike | undefined {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    Array.isArray((error as { errors?: unknown }).errors)
+  ) {
+    return error as CombinedGraphQLErrorLike;
+  }
+  return undefined;
 }
 
 function spanNameFor(
@@ -99,7 +142,11 @@ function injectTraceContext(operation: Operation, ctx: Context): void {
  * so an instrumented `fetch` will nest its HTTP span as a child. In the browser,
  * where the active context often does not survive the async hop to `fetch`, the
  * `injectTraceContext` option additionally writes `traceparent` into the request
- * headers for reliable frontend → backend correlation.
+ * headers for reliable frontend -> backend correlation.
+ *
+ * Works with both Apollo Client 3 and 4: it imports only the stable
+ * `@apollo/client/core` surface and detects the v4 error shape at runtime rather
+ * than importing version-specific error classes.
  *
  * ## Subscriptions
  * A subscription span covers establishment up to the **first emission** only,
@@ -111,11 +158,18 @@ export function createOpenTelemetryLink(
   options: OpenTelemetryLinkOptions = {},
 ): ApolloLink {
   const config = resolveOptions(options);
+  const recorder = createMetricsRecorder(config);
 
   return new ApolloLink((operation, forward) => {
     if (!forward) {
-      // No downstream link - nothing to trace, pass through defensively.
-      return null;
+      // No downstream link - nothing to trace. Complete immediately. Returning
+      // a completing observable (rather than `null`) keeps the handler's return
+      // type valid under both Apollo Client 3 and 4.
+      return new Observable<FetchResult>((observer) => observer.complete());
+    }
+
+    if (config.shouldTrace && !config.shouldTrace(operation)) {
+      return forward(operation);
     }
 
     const info = describeOperation(operation);
@@ -131,6 +185,14 @@ export function createOpenTelemetryLink(
 
     if (config.includeDocument) {
       attributes[ATTR_GRAPHQL_DOCUMENT] = printRedactedDocument(operation);
+    }
+
+    const persisted = resolvePersistedQuery(operation);
+    if (persisted) {
+      attributes[ATTR_APOLLO_PERSISTED_QUERY] = true;
+      if (persisted.hash !== undefined) {
+        attributes[ATTR_APOLLO_PERSISTED_QUERY_HASH] = persisted.hash;
+      }
     }
 
     const server = resolveServerAddress(operation);
@@ -150,22 +212,50 @@ export function createOpenTelemetryLink(
       injectTraceContext(operation, activeContext);
     }
 
-    return traceForward(span, activeContext, config, () => forward(operation));
+    return traceForward(
+      { span, activeContext, config, recorder, info, operation },
+      () => forward(operation),
+    );
   });
 }
 
+interface TraceContext {
+  span: Span;
+  activeContext: Context;
+  config: ResolvedOptions;
+  recorder: MetricsRecorder | null;
+  info: OperationInfo;
+  operation: Operation;
+}
+
 function traceForward(
-  span: Span,
-  activeContext: Context,
-  config: ResolvedOptions,
+  ctx: TraceContext,
   forward: () => Observable<FetchResult>,
 ): Observable<FetchResult> {
+  const { span, activeContext, config, recorder, info, operation } = ctx;
+
   return new Observable<FetchResult>((observer) => {
     let spanEnded = false;
+    const startedAt = monotonicNow();
 
-    const endSpan = (): void => {
+    const endSpan = (errorType?: string): void => {
       spanEnded = true;
+
+      const retryCount = resolveRetryCount(operation);
+      if (retryCount !== undefined) {
+        span.setAttribute(ATTR_APOLLO_RETRY_COUNT, retryCount);
+      }
+
       span.end();
+
+      if (recorder) {
+        recorder.record({
+          durationSeconds: (monotonicNow() - startedAt) / 1000,
+          operationName: info.name,
+          operationType: info.type,
+          errorType,
+        });
+      }
     };
 
     // Keep the operation span active while subscribing/forwarding so any
@@ -176,38 +266,64 @@ function traceForward(
           if (!spanEnded) {
             // Span covers up to the first emission (query/mutation result, or
             // the first subscription message), then ends.
-            const graphQLErrors = hasGraphQLErrors(result);
-            span.setAttribute(ATTR_APOLLO_HAS_GRAPHQL_ERRORS, graphQLErrors);
-            if (graphQLErrors && config.graphQLErrorsAsSpanError) {
+            const errorCount = graphQLErrorCount(result);
+            const hasGraphQLErrors = errorCount > 0;
+            span.setAttribute(ATTR_APOLLO_HAS_GRAPHQL_ERRORS, hasGraphQLErrors);
+            if (hasGraphQLErrors) {
+              span.setAttribute(ATTR_APOLLO_GRAPHQL_ERROR_COUNT, errorCount);
+            }
+            if (hasGraphQLErrors && config.graphQLErrorsAsSpanError) {
               span.setAttribute(ATTR_ERROR_TYPE, "graphql_error");
               span.setStatus({
                 code: SpanStatusCode.ERROR,
                 message: result.errors?.[0]?.message,
               });
+              endSpan("graphql_error");
             } else {
               span.setStatus({ code: SpanStatusCode.OK });
+              endSpan();
             }
-            endSpan();
           }
           observer.next(result);
         },
         error: (networkError: unknown) => {
           if (!spanEnded) {
-            span.setAttribute(ATTR_APOLLO_HAS_GRAPHQL_ERRORS, false);
-            span.setAttribute(ATTR_ERROR_TYPE, errorTypeOf(networkError));
-            if (networkError instanceof Error) {
-              span.recordException(networkError);
+            const combined = asCombinedGraphQLError(networkError);
+            if (combined) {
+              // Apollo Client 4 surfaces GraphQL errors here as a combined
+              // error object rather than on the `next` channel.
+              const errorCount = combined.errors.length;
+              const errorType =
+                (typeof combined.name === "string" && combined.name) ||
+                "graphql_error";
+              span.setAttribute(ATTR_APOLLO_HAS_GRAPHQL_ERRORS, errorCount > 0);
+              if (errorCount > 0) {
+                span.setAttribute(ATTR_APOLLO_GRAPHQL_ERROR_COUNT, errorCount);
+              }
+              span.setAttribute(ATTR_ERROR_TYPE, errorType);
+              recordException(span, networkError);
+              span.setStatus({
+                code: SpanStatusCode.ERROR,
+                message:
+                  typeof combined.message === "string"
+                    ? combined.message
+                    : undefined,
+              });
+              endSpan(errorType);
             } else {
-              span.recordException({ message: String(networkError) });
+              const errorType = errorTypeOf(networkError);
+              span.setAttribute(ATTR_APOLLO_HAS_GRAPHQL_ERRORS, false);
+              span.setAttribute(ATTR_ERROR_TYPE, errorType);
+              recordException(span, networkError);
+              span.setStatus({
+                code: SpanStatusCode.ERROR,
+                message:
+                  networkError instanceof Error
+                    ? networkError.message
+                    : String(networkError),
+              });
+              endSpan(errorType);
             }
-            span.setStatus({
-              code: SpanStatusCode.ERROR,
-              message:
-                networkError instanceof Error
-                  ? networkError.message
-                  : String(networkError),
-            });
-            endSpan();
           }
           observer.error(networkError);
         },
@@ -234,4 +350,12 @@ function traceForward(
       subscription.unsubscribe();
     };
   });
+}
+
+function recordException(span: Span, error: unknown): void {
+  if (error instanceof Error) {
+    span.recordException(error);
+  } else {
+    span.recordException({ message: String(error) });
+  }
 }

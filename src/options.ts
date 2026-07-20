@@ -1,5 +1,5 @@
 import { trace } from "@opentelemetry/api";
-import type { Tracer } from "@opentelemetry/api";
+import type { Meter, Tracer } from "@opentelemetry/api";
 import type { Operation } from "@apollo/client/core";
 import type { GraphQLOperationType } from "./attributes";
 
@@ -77,6 +77,36 @@ export interface OpenTelemetryLinkOptions {
    * @default true
    */
   graphQLErrorsAsSpanError?: boolean;
+
+  /**
+   * Predicate deciding whether an operation should be traced. Return `false` to
+   * forward the operation untraced (no span, no metrics), for example to drop
+   * health-check or polling operations.
+   *
+   * Receives the raw Apollo operation. When omitted, every operation is traced
+   * (subject to `skipIntrospection`).
+   */
+  shouldTrace?: (operation: Operation) => boolean;
+
+  /**
+   * Meter used to record operation metrics. Providing a meter enables metrics.
+   *
+   * Emits the `graphql.client.operation.duration` histogram (seconds) and the
+   * `graphql.client.operation.errors` counter. Takes precedence over
+   * {@link enableMetrics}.
+   */
+  meter?: Meter;
+
+  /**
+   * When `true` (and no explicit {@link meter} is given), enables metrics using
+   * the global meter provider (`metrics.getMeter("apollo-client-otel")`).
+   *
+   * Metrics are fully opt-in: with both `meter` and `enableMetrics` unset, no
+   * instruments are created and there is zero per-operation cost.
+   *
+   * @default false
+   */
+  enableMetrics?: boolean;
 }
 
 export interface ResolvedOptions {
@@ -86,6 +116,9 @@ export interface ResolvedOptions {
   injectTraceContext: boolean;
   skipIntrospection: boolean;
   graphQLErrorsAsSpanError: boolean;
+  shouldTrace?: (operation: Operation) => boolean;
+  meter?: Meter;
+  enableMetrics: boolean;
 }
 
 export function resolveOptions(
@@ -98,5 +131,8 @@ export function resolveOptions(
     injectTraceContext: options.injectTraceContext ?? true,
     skipIntrospection: options.skipIntrospection ?? true,
     graphQLErrorsAsSpanError: options.graphQLErrorsAsSpanError ?? true,
+    shouldTrace: options.shouldTrace,
+    meter: options.meter,
+    enableMetrics: options.enableMetrics ?? false,
   };
 }

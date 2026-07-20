@@ -5,33 +5,13 @@ import {
   gql,
 } from "@apollo/client/core";
 import type { FetchResult, GraphQLRequest } from "@apollo/client/core";
-import {
-  BasicTracerProvider,
-  InMemorySpanExporter,
-  SimpleSpanProcessor,
-} from "@opentelemetry/sdk-trace-base";
-import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
-import type { Tracer } from "@opentelemetry/api";
 
 export { gql };
-
-export interface TracingHarness {
-  tracer: Tracer;
-  exporter: InMemorySpanExporter;
-  spans: () => ReadableSpan[];
-}
-
-export function createTracingHarness(): TracingHarness {
-  const exporter = new InMemorySpanExporter();
-  const provider = new BasicTracerProvider();
-  provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
-  const tracer = provider.getTracer("test");
-  return {
-    tracer,
-    exporter,
-    spans: () => exporter.getFinishedSpans(),
-  };
-}
+export {
+  createMetricsHarness,
+  createTracingHarness,
+} from "./otel";
+export type { MetricsHarness, TracingHarness } from "./otel";
 
 /** Terminating link that resolves once with the given result. */
 export function successLink(result: FetchResult): ApolloLink {
