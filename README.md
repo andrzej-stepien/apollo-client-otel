@@ -1,5 +1,7 @@
 # apollo-client-otel
 
+[![npm](https://img.shields.io/npm/v/apollo-client-otel)](https://www.npmjs.com/package/apollo-client-otel)
+
 OpenTelemetry instrumentation for [Apollo Client](https://www.apollographql.com/docs/react/)
 that understands **GraphQL operations**, not just the underlying `fetch` request.
 
