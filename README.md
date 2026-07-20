@@ -227,7 +227,14 @@ Apollo Client 4 reworked the error model (GraphQL errors surface as a
 class - which would tie the library to one major version - the link **detects
 the error shape at runtime** (an `Error` carrying an `errors` array) and records
 `apollo.has_graphql_errors`, `apollo.graphql_error_count`, and `error.type` from
-it.
+it. `graphQLErrorsAsSpanError` gates the ERROR status, the recorded exception,
+and the metrics error label identically on both versions.
+
+One deliberate difference: with `graphQLErrorsAsSpanError: true` the `error.type`
+value is `"graphql_error"` on Apollo Client 3 (errors arrive on the result, with
+no error object to name) but the combined-error class name (e.g.
+`"CombinedGraphQLErrors"`) on Apollo Client 4, which is more informative. If you
+alert or group by `error.type`, account for both values when migrating.
 
 The test suite runs against both versions: the default suite against Apollo
 Client 3, and `npm run test:v4` end-to-end against Apollo Client 4 (installed as
