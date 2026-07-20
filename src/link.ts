@@ -291,25 +291,34 @@ function traceForward(
             const combined = asCombinedGraphQLError(networkError);
             if (combined) {
               // Apollo Client 4 surfaces GraphQL errors here as a combined
-              // error object rather than on the `next` channel.
+              // error object rather than on the `next` channel. Mirror the
+              // `next`-channel handling: the GraphQL-error attributes are
+              // always set, but ERROR status, the recorded exception, and the
+              // metrics error type are gated on `graphQLErrorsAsSpanError` -
+              // so AC3 -> AC4 migration keeps the same telemetry semantics.
               const errorCount = combined.errors.length;
-              const errorType =
-                (typeof combined.name === "string" && combined.name) ||
-                "graphql_error";
               span.setAttribute(ATTR_APOLLO_HAS_GRAPHQL_ERRORS, errorCount > 0);
               if (errorCount > 0) {
                 span.setAttribute(ATTR_APOLLO_GRAPHQL_ERROR_COUNT, errorCount);
               }
-              span.setAttribute(ATTR_ERROR_TYPE, errorType);
-              recordException(span, networkError);
-              span.setStatus({
-                code: SpanStatusCode.ERROR,
-                message:
-                  typeof combined.message === "string"
-                    ? combined.message
-                    : undefined,
-              });
-              endSpan(errorType);
+              if (config.graphQLErrorsAsSpanError) {
+                const errorType =
+                  (typeof combined.name === "string" && combined.name) ||
+                  "graphql_error";
+                span.setAttribute(ATTR_ERROR_TYPE, errorType);
+                recordException(span, networkError);
+                span.setStatus({
+                  code: SpanStatusCode.ERROR,
+                  message:
+                    typeof combined.message === "string"
+                      ? combined.message
+                      : undefined,
+                });
+                endSpan(errorType);
+              } else {
+                span.setStatus({ code: SpanStatusCode.OK });
+                endSpan();
+              }
             } else {
               const errorType = errorTypeOf(networkError);
               span.setAttribute(ATTR_APOLLO_HAS_GRAPHQL_ERRORS, false);

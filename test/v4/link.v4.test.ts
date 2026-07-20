@@ -128,4 +128,33 @@ describe("Apollo Client 4 (real package, end-to-end)", () => {
     expect(span?.attributes["error.type"]).toBe("CombinedGraphQLErrors");
     expect(span?.status.code).toBe(SpanStatusCode.ERROR);
   });
+
+  it("respects graphQLErrorsAsSpanError: false for CombinedGraphQLErrors (regression)", async () => {
+    // AC3 semantics: with the option off, GraphQL errors never mark the span
+    // as an error. The AC4 error-channel branch must behave identically, so a
+    // 3 -> 4 migration does not silently change telemetry.
+    const combined = new CombinedGraphQLErrors({
+      data: null,
+      errors: [{ message: "boom" }, { message: "bang" }],
+    });
+    const link = from([
+      createOpenTelemetryLink({
+        tracer: harness.tracer,
+        graphQLErrorsAsSpanError: false,
+      }),
+      v4ErrorLink(combined),
+    ]);
+
+    const outcome = await runV4(link, { query: QUERY });
+    expect(outcome.error).toBe(combined);
+
+    const [span] = harness.spans();
+    // GraphQL-error attributes are still recorded...
+    expect(span?.attributes["apollo.has_graphql_errors"]).toBe(true);
+    expect(span?.attributes["apollo.graphql_error_count"]).toBe(2);
+    // ...but the span is not an error and carries no exception.
+    expect(span?.status.code).toBe(SpanStatusCode.OK);
+    expect(span?.attributes["error.type"]).toBeUndefined();
+    expect(span?.events ?? []).toHaveLength(0);
+  });
 });
