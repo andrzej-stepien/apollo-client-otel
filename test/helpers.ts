@@ -44,6 +44,40 @@ export function streamingLink(results: FetchResult[]): ApolloLink {
   );
 }
 
+/**
+ * Terminating link that emits the given results then errors - models a
+ * subscription that produces messages before failing.
+ */
+export function streamingErrorLink(
+  results: FetchResult[],
+  error: unknown,
+): ApolloLink {
+  return new ApolloLink(
+    () =>
+      new Observable<FetchResult>((observer) => {
+        for (const result of results) {
+          observer.next(result);
+        }
+        observer.error(error);
+      }),
+  );
+}
+
+/**
+ * Terminating link that emits the given results and then stays open (never
+ * completes) - models a live subscription the consumer later unsubscribes from.
+ */
+export function openStreamLink(results: FetchResult[]): ApolloLink {
+  return new ApolloLink(
+    () =>
+      new Observable<FetchResult>((observer) => {
+        for (const result of results) {
+          observer.next(result);
+        }
+      }),
+  );
+}
+
 /** Terminating link whose observable never emits (models a pending request). */
 export function neverEmitsLink(): ApolloLink {
   return new ApolloLink(() => new Observable<FetchResult>(() => {}));

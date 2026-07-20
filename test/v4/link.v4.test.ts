@@ -40,6 +40,18 @@ function v4ErrorLink(error: unknown): ApolloLink {
   );
 }
 
+function v4StreamingLink(results: FetchResult[]): ApolloLink {
+  return new ApolloLink(
+    () =>
+      new Observable<FetchResult>((observer) => {
+        for (const result of results) {
+          observer.next(result);
+        }
+        observer.complete();
+      }),
+  );
+}
+
 function runV4(
   link: ApolloLink,
   request: GraphQLRequest,
@@ -60,6 +72,12 @@ const QUERY = gql`
       id
       name
     }
+  }
+`;
+
+const SUBSCRIPTION = gql`
+  subscription OnTick {
+    tick
   }
 `;
 
@@ -156,5 +174,29 @@ describe("Apollo Client 4 (real package, end-to-end)", () => {
     expect(span?.status.code).toBe(SpanStatusCode.OK);
     expect(span?.attributes["error.type"]).toBeUndefined();
     expect(span?.events ?? []).toHaveLength(0);
+  });
+
+  it("traces a subscription session end-to-end (event per message, count, OK)", async () => {
+    const link = from([
+      createOpenTelemetryLink({
+        tracer: harness.tracer,
+        subscriptions: { mode: "session" },
+      }),
+      v4StreamingLink([{ data: { tick: 1 } }, { data: { tick: 2 } }]),
+    ]);
+
+    const outcome = await runV4(link, { query: SUBSCRIPTION });
+    expect(outcome.results).toHaveLength(2);
+
+    const [span] = harness.spans();
+    expect(span?.name).toBe("subscription OnTick");
+    expect(span?.attributes["graphql.operation.type"]).toBe("subscription");
+    expect(
+      (span?.events ?? []).filter(
+        (e) => e.name === "apollo.subscription.message",
+      ),
+    ).toHaveLength(2);
+    expect(span?.attributes["apollo.subscription.message_count"]).toBe(2);
+    expect(span?.status.code).toBe(SpanStatusCode.OK);
   });
 });

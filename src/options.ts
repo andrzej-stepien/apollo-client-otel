@@ -13,6 +13,32 @@ export interface SpanNameContext {
   operation: Operation;
 }
 
+/** How subscription operations are traced. */
+export type SubscriptionMode = "first-emission" | "session";
+
+/** Tunables for subscription tracing. See {@link OpenTelemetryLinkOptions.subscriptions}. */
+export interface SubscriptionOptions {
+  /**
+   * `"first-emission"` (default) ends the subscription span at the first
+   * message, matching query/mutation behaviour. `"session"` keeps the span open
+   * for the whole subscription, adding a span event per message (without any
+   * payload) until it completes, errors, or is unsubscribed.
+   *
+   * @default "first-emission"
+   */
+  mode?: SubscriptionMode;
+
+  /**
+   * Maximum number of per-message span events recorded in `"session"` mode.
+   * Once exceeded, further messages are still counted
+   * (`apollo.subscription.message_count`) but add no events, and
+   * `apollo.subscription.events_truncated` is set to `true`.
+   *
+   * @default 100
+   */
+  maxEvents?: number;
+}
+
 export interface OpenTelemetryLinkOptions {
   /**
    * Tracer used to create operation spans.
@@ -107,6 +133,18 @@ export interface OpenTelemetryLinkOptions {
    * @default false
    */
   enableMetrics?: boolean;
+
+  /**
+   * Subscription tracing behaviour. By default (`mode: "first-emission"`) a
+   * subscription span ends at the first message, exactly as in earlier
+   * releases. Set `mode: "session"` to keep one span open for the whole
+   * subscription, with a payload-free span event per message (capped by
+   * `maxEvents`, default 100).
+   *
+   * This only affects operations of type `subscription`; queries and mutations
+   * behave identically regardless of this option.
+   */
+  subscriptions?: SubscriptionOptions;
 }
 
 export interface ResolvedOptions {
@@ -119,6 +157,7 @@ export interface ResolvedOptions {
   shouldTrace?: (operation: Operation) => boolean;
   meter?: Meter;
   enableMetrics: boolean;
+  subscriptions: { mode: SubscriptionMode; maxEvents: number };
 }
 
 export function resolveOptions(
@@ -134,5 +173,9 @@ export function resolveOptions(
     shouldTrace: options.shouldTrace,
     meter: options.meter,
     enableMetrics: options.enableMetrics ?? false,
+    subscriptions: {
+      mode: options.subscriptions?.mode ?? "first-emission",
+      maxEvents: options.subscriptions?.maxEvents ?? 100,
+    },
   };
 }
