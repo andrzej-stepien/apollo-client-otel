@@ -1,0 +1,38 @@
+name: Release
+
+# Publishes to npm with provenance via OIDC trusted publishing - no npm token
+# stored anywhere. One-time setup on npmjs.com: package Settings -> Trusted
+# Publisher -> GitHub Actions (this repository, workflow file "release.yml").
+# To release: create a GitHub Release for a tag matching package.json version.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # OIDC trusted publishing requires npm >= 11.5.1.
+      - run: npm install -g npm@latest
+
+      - run: npm ci --ignore-scripts
+
+      - run: npm run build
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - run: npm publish --provenance --access public
