@@ -13,6 +13,12 @@
     "apollo-link"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andrzej-stepien/apollo-client-otel.git"
+  },
+  "homepage": "https://github.com/andrzej-stepien/apollo-client-otel#readme",
+  "bugs": "https://github.com/andrzej-stepien/apollo-client-otel/issues",
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.cjs",
