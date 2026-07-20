@@ -16,7 +16,7 @@ export interface OperationInfo {
 
 function resolveOperationDefinition(
   query: DocumentNode,
-  operationName: string,
+  operationName: string | undefined,
 ): OperationDefinitionNode | null {
   // `getOperationAST` picks the named operation, or the single operation when
   // the name is empty. Returns null for documents with multiple anonymous ops.
@@ -92,4 +92,60 @@ export function redactDocument(query: DocumentNode): DocumentNode {
 /** Printed document with inline scalar literals redacted. */
 export function printRedactedDocument(operation: Operation): string {
   return print(redactDocument(operation.query));
+}
+
+/** Details of an Automatic Persisted Query, when the operation carries one. */
+export interface PersistedQueryInfo {
+  /** APQ document hash (sha256), when available. */
+  hash?: string;
+}
+
+function readPersistedQueryEntry(
+  source: unknown,
+): PersistedQueryInfo | undefined {
+  if (typeof source !== "object" || source === null) {
+    return undefined;
+  }
+  const entry = (source as { persistedQuery?: unknown }).persistedQuery;
+  if (typeof entry !== "object" || entry === null) {
+    return undefined;
+  }
+  const hash = (entry as { sha256Hash?: unknown }).sha256Hash;
+  return { hash: typeof hash === "string" ? hash : undefined };
+}
+
+/**
+ * Detects an Automatic Persisted Query. The standard
+ * `createPersistedQueryLink` records `extensions.persistedQuery` on the
+ * operation (and mirrors it in context in some setups). We read the sha256 hash
+ * from whichever is present.
+ *
+ * The telemetry link should be placed **after** the persisted-query link for
+ * this to observe the hash, since the persisted-query link is what populates
+ * `extensions.persistedQuery`. The hash identifies query text only and carries
+ * no request data.
+ */
+export function resolvePersistedQuery(
+  operation: Operation,
+): PersistedQueryInfo | undefined {
+  const fromExtensions = readPersistedQueryEntry(
+    (operation as { extensions?: unknown }).extensions,
+  );
+  if (fromExtensions) {
+    return fromExtensions;
+  }
+  return readPersistedQueryEntry(operation.getContext());
+}
+
+/**
+ * Best-effort retry count for the operation, read from the operation context
+ * field `retryCount` (a plain number). Apollo's `RetryLink` does not expose a
+ * count by default; this is populated only when the application or a custom
+ * retry link writes `context.retryCount`. Returns `undefined` when absent.
+ */
+export function resolveRetryCount(operation: Operation): number | undefined {
+  const value = (operation.getContext() as { retryCount?: unknown }).retryCount;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }

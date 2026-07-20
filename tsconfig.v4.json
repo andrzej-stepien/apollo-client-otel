@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@apollo/client": ["./node_modules/apollo-client-v4/core/index.d.ts"],
+      "@apollo/client/*": ["./node_modules/apollo-client-v4/*"]
+    }
+  },
+  "include": ["src", "test/v4", "vitest.v4.config.ts"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -15,5 +15,23 @@ export const ATTR_ERROR_TYPE = "error.type";
 export const ATTR_APOLLO_HAS_GRAPHQL_ERRORS = "apollo.has_graphql_errors";
 export const ATTR_APOLLO_CANCELED = "apollo.canceled";
 
+/** Number of GraphQL errors carried in the operation result (only when > 0). */
+export const ATTR_APOLLO_GRAPHQL_ERROR_COUNT = "apollo.graphql_error_count";
+
+/**
+ * Number of retries observed for the operation, read best-effort from the
+ * operation context. See {@link resolveRetryCount} for the exact source.
+ */
+export const ATTR_APOLLO_RETRY_COUNT = "apollo.retry_count";
+
+/** `true` when the operation is sent as an Automatic Persisted Query (APQ). */
+export const ATTR_APOLLO_PERSISTED_QUERY = "apollo.persisted_query";
+
+/**
+ * The APQ document hash (sha256). This identifies the query text only and
+ * carries no request data, so it is safe to record.
+ */
+export const ATTR_APOLLO_PERSISTED_QUERY_HASH = "apollo.persisted_query.hash";
+
 /** GraphQL operation kinds understood by Apollo. */
 export type GraphQLOperationType = "query" | "mutation" | "subscription";
