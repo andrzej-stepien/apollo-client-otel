@@ -1,5 +1,7 @@
 # apollo-client-otel
 
+[![npm](https://img.shields.io/npm/v/apollo-client-otel)](https://www.npmjs.com/package/apollo-client-otel)
+
 OpenTelemetry instrumentation for [Apollo Client](https://www.apollographql.com/docs/react/)
 that understands **GraphQL operations**, not just the underlying `fetch` request.
 
@@ -108,6 +110,7 @@ so it is still exported rather than leaked.
 | `shouldTrace` | `(operation) => boolean` | trace all | Return `false` to forward an operation untraced (no span, no metrics). |
 | `meter` | `Meter` | - | Provide a meter to enable [metrics](#metrics). Takes precedence over `enableMetrics`. |
 | `enableMetrics` | `boolean` | `false` | Enable [metrics](#metrics) using the global meter provider. |
+| `subscriptions` | `{ mode?: "first-emission" \| "session"; maxEvents?: number }` | `{ mode: "first-emission", maxEvents: 100 }` | [Subscription](#subscriptions) tracing behaviour. `"session"` keeps one span per subscription with a payload-free event per message (capped by `maxEvents`). Affects `subscription` operations only. |
 
 Example with a plan-style name and document capture:
 
@@ -128,6 +131,55 @@ createOpenTelemetryLink({
   shouldTrace: (operation) => operation.operationName !== "HealthCheck",
 });
 ```
+
+## Subscriptions
+
+Subscriptions can be traced in two modes, selected with the `subscriptions`
+option. **Message payloads are never recorded** in either mode - only counts and
+metadata reach spans and events.
+
+### `mode: "first-emission"` (default)
+
+The historical behaviour, unchanged: the span covers subscription establishment
+through the **first message**, then ends. Subsequent emissions are forwarded
+untraced. This is the safe default for trace backends, which do not expect
+long-lived spans. Query and mutation behaviour is identical either way.
+
+### `mode: "session"`
+
+One span stays open for the **whole subscription** and ends on completion, error,
+or unsubscribe:
+
+```ts
+createOpenTelemetryLink({
+  subscriptions: { mode: "session", maxEvents: 100 },
+});
+```
+
+- Each message adds a span event named `apollo.subscription.message`. The event
+  carries **no attributes** - the payload never leaves the client.
+- Up to `maxEvents` events are recorded (default `100`). Beyond that, messages
+  are still counted but add no events, and `apollo.subscription.events_truncated`
+  is set to `true`.
+- When the span ends it records `apollo.subscription.message_count` (the total
+  number of emissions, including any past `maxEvents`). Messages that carried
+  GraphQL errors (`result.errors`) are additionally counted in
+  `apollo.subscription.error_message_count` (set only when at least one such
+  message occurred).
+- Per-message GraphQL errors never change the span status: the span does not
+  end per message, so the `graphQLErrorsAsSpanError` gate applies to terminal
+  errors only (the error channel, including combined GraphQL errors on Apollo
+  Client 4).
+- Span status: `OK` on completion **and** on unsubscribe (unsubscribe also sets
+  `apollo.canceled = true`); `ERROR` on a subscription error, using the same
+  error classification as queries and mutations (including the
+  `graphQLErrorsAsSpanError` gate for combined GraphQL errors).
+- The duration metric naturally spans the whole session, since the span ends when
+  the session does.
+
+`mode: "session"` applies **only to `subscription` operations**. Queries and
+mutations always end at the first emission regardless of this option, so enabling
+session mode is backward compatible for everything else.
 
 ## Metrics
 
@@ -205,10 +257,11 @@ link) writes `context.retryCount`.
   `injectTraceContext` sidesteps this by putting `traceparent` on the request
   headers, giving you frontend → backend correlation even without zone.js and
   without fetch instrumentation.
-- **Subscriptions are traced up to the first emission only.** The span covers
+- **Subscriptions default to first-emission tracing.** The span covers
   establishment through the first message, then ends - a long-lived span is an
-  anti-pattern for trace backends. Subsequent emissions are forwarded untraced.
-  Full streaming / `graphql-ws` support is planned for a later release.
+  anti-pattern for trace backends. Opt into full-session tracing (one span per
+  subscription, an event per message) with `subscriptions: { mode: "session" }`;
+  see [Subscriptions](#subscriptions).
 - **`BatchHttpLink` shares HTTP timing across operations.** A span per operation
   is still correct, but the transport timing is shared by every operation batched
   into the same HTTP request.

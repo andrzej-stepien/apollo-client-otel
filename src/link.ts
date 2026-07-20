@@ -15,12 +15,16 @@ import {
   ATTR_APOLLO_PERSISTED_QUERY,
   ATTR_APOLLO_PERSISTED_QUERY_HASH,
   ATTR_APOLLO_RETRY_COUNT,
+  ATTR_APOLLO_SUBSCRIPTION_ERROR_MESSAGE_COUNT,
+  ATTR_APOLLO_SUBSCRIPTION_EVENTS_TRUNCATED,
+  ATTR_APOLLO_SUBSCRIPTION_MESSAGE_COUNT,
   ATTR_ERROR_TYPE,
   ATTR_GRAPHQL_DOCUMENT,
   ATTR_GRAPHQL_OPERATION_NAME,
   ATTR_GRAPHQL_OPERATION_TYPE,
   ATTR_SERVER_ADDRESS,
   ATTR_SERVER_PORT,
+  SUBSCRIPTION_MESSAGE_EVENT,
 } from "./attributes";
 import { createMetricsRecorder } from "./metrics";
 import type { MetricsRecorder } from "./metrics";
@@ -149,10 +153,12 @@ function injectTraceContext(operation: Operation, ctx: Context): void {
  * than importing version-specific error classes.
  *
  * ## Subscriptions
- * A subscription span covers establishment up to the **first emission** only,
- * then ends. Subsequent emissions are forwarded untraced (a long-lived span is
- * an anti-pattern for trace backends). Full streaming support is planned with
- * `graphql-ws` in a later release.
+ * By default a subscription span covers establishment up to the **first
+ * emission** only, then ends. Pass `subscriptions: { mode: "session" }` to keep
+ * one span open for the whole subscription instead, adding a payload-free span
+ * event per message (capped by `maxEvents`) and recording
+ * `apollo.subscription.message_count` when it settles. Message payloads never
+ * reach spans or events - only counts and metadata are recorded.
  */
 export function createOpenTelemetryLink(
   options: OpenTelemetryLinkOptions = {},
@@ -212,8 +218,13 @@ export function createOpenTelemetryLink(
       injectTraceContext(operation, activeContext);
     }
 
+    // Session tracing applies only to subscriptions; queries and mutations are
+    // unaffected by the `subscriptions` option and keep first-emission timing.
+    const sessionMode =
+      config.subscriptions.mode === "session" && info.type === "subscription";
+
     return traceForward(
-      { span, activeContext, config, recorder, info, operation },
+      { span, activeContext, config, recorder, info, operation, sessionMode },
       () => forward(operation),
     );
   });
@@ -226,20 +237,41 @@ interface TraceContext {
   recorder: MetricsRecorder | null;
   info: OperationInfo;
   operation: Operation;
+  sessionMode: boolean;
 }
 
 function traceForward(
   ctx: TraceContext,
   forward: () => Observable<FetchResult>,
 ): Observable<FetchResult> {
-  const { span, activeContext, config, recorder, info, operation } = ctx;
+  const { span, activeContext, config, recorder, info, operation, sessionMode } =
+    ctx;
 
   return new Observable<FetchResult>((observer) => {
     let spanEnded = false;
+    let messageCount = 0;
+    let errorMessageCount = 0;
+    let eventsTruncated = false;
     const startedAt = monotonicNow();
 
     const endSpan = (errorType?: string): void => {
       spanEnded = true;
+
+      if (sessionMode) {
+        span.setAttribute(
+          ATTR_APOLLO_SUBSCRIPTION_MESSAGE_COUNT,
+          messageCount,
+        );
+        if (errorMessageCount > 0) {
+          span.setAttribute(
+            ATTR_APOLLO_SUBSCRIPTION_ERROR_MESSAGE_COUNT,
+            errorMessageCount,
+          );
+        }
+        if (eventsTruncated) {
+          span.setAttribute(ATTR_APOLLO_SUBSCRIPTION_EVENTS_TRUNCATED, true);
+        }
+      }
 
       const retryCount = resolveRetryCount(operation);
       if (retryCount !== undefined) {
@@ -263,6 +295,25 @@ function traceForward(
     const subscription = otelContext.with(activeContext, () =>
       forward().subscribe({
         next: (result) => {
+          if (sessionMode) {
+            // Session mode: the span lives until the subscription settles. Each
+            // message adds a payload-free event up to `maxEvents`; beyond that
+            // messages are only counted and the span is flagged as truncated.
+            // Messages carrying GraphQL errors are counted separately; they
+            // never change the span status, because the span does not end per
+            // message (graphQLErrorsAsSpanError gates terminal errors only).
+            messageCount += 1;
+            if (graphQLErrorCount(result) > 0) {
+              errorMessageCount += 1;
+            }
+            if (messageCount <= config.subscriptions.maxEvents) {
+              span.addEvent(SUBSCRIPTION_MESSAGE_EVENT);
+            } else {
+              eventsTruncated = true;
+            }
+            observer.next(result);
+            return;
+          }
           if (!spanEnded) {
             // Span covers up to the first emission (query/mutation result, or
             // the first subscription message), then ends.
@@ -338,8 +389,12 @@ function traceForward(
         },
         complete: () => {
           if (!spanEnded) {
-            // Completed without any emission.
-            span.setAttribute(ATTR_APOLLO_HAS_GRAPHQL_ERRORS, false);
+            if (!sessionMode) {
+              // First-emission mode: completed without any emission.
+              span.setAttribute(ATTR_APOLLO_HAS_GRAPHQL_ERRORS, false);
+            }
+            // Session mode: the subscription ended cleanly - status OK and the
+            // message count is recorded by endSpan.
             span.setStatus({ code: SpanStatusCode.OK });
             endSpan();
           }
@@ -354,6 +409,12 @@ function traceForward(
       // cancellation is not an error, so the status stays UNSET.
       if (!spanEnded) {
         span.setAttribute(ATTR_APOLLO_CANCELED, true);
+        if (sessionMode) {
+          // A canceled subscription session is a normal end-of-life, not an
+          // error: mark OK (in addition to apollo.canceled) and record the
+          // message count via endSpan.
+          span.setStatus({ code: SpanStatusCode.OK });
+        }
         endSpan();
       }
       subscription.unsubscribe();

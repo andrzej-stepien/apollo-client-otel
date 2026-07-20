@@ -1,6 +1,6 @@
 {
   "name": "apollo-client-otel",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "OpenTelemetry instrumentation for Apollo Client that understands GraphQL operations, implemented as a plain ApolloLink.",
   "keywords": [
     "apollo",

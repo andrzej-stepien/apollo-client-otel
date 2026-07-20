@@ -28,6 +28,39 @@ export const ATTR_APOLLO_RETRY_COUNT = "apollo.retry_count";
 export const ATTR_APOLLO_PERSISTED_QUERY = "apollo.persisted_query";
 
 /**
+ * Total number of messages emitted by a subscription over the life of its span
+ * (session mode only). Counts every emission, including those beyond
+ * `maxEvents` that no longer add a span event.
+ */
+export const ATTR_APOLLO_SUBSCRIPTION_MESSAGE_COUNT =
+  "apollo.subscription.message_count";
+
+/**
+ * `true` when a subscription emitted more messages than `maxEvents`, so some
+ * emissions were counted but did not add a span event. Only set when truncation
+ * occurred (session mode).
+ */
+export const ATTR_APOLLO_SUBSCRIPTION_EVENTS_TRUNCATED =
+  "apollo.subscription.events_truncated";
+
+/**
+ * Number of subscription messages that carried GraphQL errors (`result.errors`)
+ * over the life of the span (session mode only). Set only when at least one
+ * message carried errors. Per-message errors never change the span status -
+ * the `graphQLErrorsAsSpanError` gate applies to terminal errors only, because
+ * a session span does not end per message.
+ */
+export const ATTR_APOLLO_SUBSCRIPTION_ERROR_MESSAGE_COUNT =
+  "apollo.subscription.error_message_count";
+
+/**
+ * Span event name added per subscription message in session mode. The event
+ * carries no attributes: message payloads never reach spans/events, only the
+ * count of emissions is recorded.
+ */
+export const SUBSCRIPTION_MESSAGE_EVENT = "apollo.subscription.message";
+
+/**
  * The APQ document hash (sha256). This identifies the query text only and
  * carries no request data, so it is safe to record.
  */

@@ -3,6 +3,8 @@ export type {
   OpenTelemetryLinkOptions,
   ResolvedOptions,
   SpanNameContext,
+  SubscriptionMode,
+  SubscriptionOptions,
 } from "./options";
 export { TRACER_NAME } from "./options";
 export type { GraphQLOperationType } from "./attributes";
@@ -22,10 +24,14 @@ export {
   ATTR_APOLLO_PERSISTED_QUERY,
   ATTR_APOLLO_PERSISTED_QUERY_HASH,
   ATTR_APOLLO_RETRY_COUNT,
+  ATTR_APOLLO_SUBSCRIPTION_ERROR_MESSAGE_COUNT,
+  ATTR_APOLLO_SUBSCRIPTION_EVENTS_TRUNCATED,
+  ATTR_APOLLO_SUBSCRIPTION_MESSAGE_COUNT,
   ATTR_ERROR_TYPE,
   ATTR_GRAPHQL_DOCUMENT,
   ATTR_GRAPHQL_OPERATION_NAME,
   ATTR_GRAPHQL_OPERATION_TYPE,
   ATTR_SERVER_ADDRESS,
   ATTR_SERVER_PORT,
+  SUBSCRIPTION_MESSAGE_EVENT,
 } from "./attributes";
